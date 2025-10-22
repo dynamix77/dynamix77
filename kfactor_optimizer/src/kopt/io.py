@@ -58,7 +58,6 @@ CUSTOMER_FUEL_MAPPINGS = {
     'OptimumDelivery': ['OptimumDelivery', 'Optimum Delivery', 'OptDelivery'],
     'NextDDay': ['NextDDay', 'NextDeliveryDay', 'Next DDay'],
     'RunOutDDay': ['RunOutDDay', 'RunOut DDay', 'RunoutDay'],
-    'AllowSmartK': ['AllowSmartK', 'Allow Smart K', 'SmartKAllowed'],
     'SmartKActive': ['SmartKActive', 'Smart K Active', 'SmartK'],
     'AutoDelivery': ['AutoDelivery', 'Auto Delivery', 'Automatic', 'IsAuto'],
 }
@@ -112,25 +111,21 @@ CUSTOMER_FUEL_SYNONYMS = {
     'previousk2': 'PreviousK2',
 
     # Seasonal K factors
-    'k factor  winter': 'WinterK',
     'k factor winter': 'WinterK',
     'winterk': 'WinterK',
     'winter k factor': 'WinterK',
     'winterkfactor': 'WinterK',
 
-    'k factor  summer': 'SummerK',
     'k factor summer': 'SummerK',
     'summerk': 'SummerK',
     'summer k factor': 'SummerK',
     'summerkfactor': 'SummerK',
 
-    'k factor  fall': 'FallK',
     'k factor fall': 'FallK',
     'fallk': 'FallK',
     'fall k factor': 'FallK',
     'fallkfactor': 'FallK',
 
-    'k factor  spring': 'SpringK',
     'k factor spring': 'SpringK',
     'springk': 'SpringK',
     'spring k factor': 'SpringK',
@@ -142,7 +137,6 @@ CUSTOMER_FUEL_SYNONYMS = {
     'tanksize': 'UsableSize',
     'tank size': 'UsableSize',
 
-    'optimum delivery  fuel': 'OptimumDelivery',
     'optimum delivery fuel': 'OptimumDelivery',
     'optimumdelivery': 'OptimumDelivery',
     'optimum delivery': 'OptimumDelivery',
@@ -151,7 +145,6 @@ CUSTOMER_FUEL_SYNONYMS = {
     'currently in tank': 'CurrentlyInTank',
     'currentlyintank': 'CurrentlyInTank',
 
-    ' full': 'PercentFull',
     'full': 'PercentFull',
     'percentfull': 'PercentFull',
     'percent full': 'PercentFull',
@@ -200,7 +193,6 @@ CUSTOMER_FUEL_SYNONYMS = {
     'customer type': 'CustomerType',
     'customertype': 'CustomerType',
 
-    'zone  fuel': 'FuelZone',
     'zone fuel': 'FuelZone',
     'zonefuel': 'FuelZone',
     'fuel zone': 'FuelZone',
@@ -209,12 +201,10 @@ CUSTOMER_FUEL_SYNONYMS = {
     'baseload': 'BaseLoad',
     'base load': 'BaseLoad',
 
-    'estimated delivery  fuel': 'EstimatedDelivery',
     'estimated delivery fuel': 'EstimatedDelivery',
     'estimateddelivery': 'EstimatedDelivery',
     'estimated delivery': 'EstimatedDelivery',
 
-    'salesperson  fuel acct': 'Salesperson',
     'salesperson fuel acct': 'Salesperson',
     'salesperson': 'Salesperson',
 
@@ -323,6 +313,14 @@ def load_customer_fuel(path: str) -> pd.DataFrame:
 
     # Normalize column names using both exact and fuzzy matching
     df = normalize_column_names(df, CUSTOMER_FUEL_MAPPINGS, CUSTOMER_FUEL_SYNONYMS)
+
+    # Handle duplicate column names (keep first occurrence only)
+    # This can happen when multiple source columns map to the same target
+    # (e.g., both "Customer Fuel Unique ID" and "PIDCustomerFuel1" -> "CustomerFuelID")
+    if df.columns.duplicated().any():
+        duplicate_cols = df.columns[df.columns.duplicated()].unique().tolist()
+        logger.warning(f"Duplicate columns after normalization (keeping first): {duplicate_cols}")
+        df = df.loc[:, ~df.columns.duplicated()]
 
     # Required columns
     required = ['CustomerFuelID', 'CustomerID', 'FuelType']
