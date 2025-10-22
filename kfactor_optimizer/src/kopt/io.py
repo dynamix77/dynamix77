@@ -7,13 +7,41 @@ Handles CSV import with schema normalization and validation.
 import pandas as pd
 import numpy as np
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Set
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
 
+def _normalize_header(header: str) -> str:
+    """
+    Normalize a single header string for fuzzy matching.
+
+    Converts to lowercase, strips leading/trailing whitespace,
+    and removes special characters (keeping only alphanumeric and spaces).
+
+    Args:
+        header: Raw header string
+
+    Returns:
+        Normalized header string
+    """
+    # Strip whitespace
+    normalized = header.strip()
+    # Convert to lowercase
+    normalized = normalized.lower()
+    # Remove special chars except spaces (keep alphanumeric + spaces)
+    normalized = re.sub(r'[^a-z0-9\s]', '', normalized)
+    # Collapse multiple spaces to single space
+    normalized = re.sub(r'\s+', ' ', normalized)
+    # Final strip
+    normalized = normalized.strip()
+    return normalized
+
+
 # Column name mappings: variations → canonical names
+# Now includes both exact matches and normalized synonyms
 CUSTOMER_FUEL_MAPPINGS = {
     'CustomerFuelID': ['CustomerFuelID', 'customer_fuel_id', 'FuelID'],
     'CustomerID': ['CustomerID', 'customer_id', 'CustID'],
@@ -35,6 +63,165 @@ CUSTOMER_FUEL_MAPPINGS = {
     'AutoDelivery': ['AutoDelivery', 'Auto Delivery', 'Automatic', 'IsAuto'],
 }
 
+# Extended synonym map for Ignite export headers (normalized form → canonical name)
+# This maps normalized lowercase strings to internal canonical field names
+CUSTOMER_FUEL_SYNONYMS = {
+    # CustomerFuelID mappings
+    'customer fuel unique id': 'CustomerFuelID',
+    'pidcustomerfuel1': 'CustomerFuelID',
+    'customerfuelid': 'CustomerFuelID',
+    'customer fuel id': 'CustomerFuelID',
+    'fuelid': 'CustomerFuelID',
+
+    # CustomerID mappings
+    'customer number': 'CustomerID',
+    'customerid': 'CustomerID',
+    'customer id': 'CustomerID',
+    'custid': 'CustomerID',
+
+    # Optional context field
+    'customer code': 'CustomerCode',
+    'customercode': 'CustomerCode',
+
+    # LocationNumber mappings
+    'customer location unique id': 'LocationNumber',
+    'locationnumber': 'LocationNumber',
+    'location number': 'LocationNumber',
+    'location': 'LocationNumber',
+    'locnum': 'LocationNumber',
+
+    # FuelType mappings
+    'customer fuel type': 'FuelType',
+    'fueltype': 'FuelType',
+    'fuel type': 'FuelType',
+    'product': 'FuelType',
+
+    # K Factor mappings
+    'k factor': 'CurrentK',
+    'kfactor': 'CurrentK',
+    'currentk': 'CurrentK',
+    'currentkfactor': 'CurrentK',
+    'current k factor': 'CurrentK',
+
+    'previous k factor': 'PreviousK',
+    'previousk': 'PreviousK',
+    'previouskfactor': 'PreviousK',
+    'prevk': 'PreviousK',
+
+    'previous k factor 2nd': 'PreviousK2',
+    'previousk2': 'PreviousK2',
+
+    # Seasonal K factors
+    'k factor  winter': 'WinterK',
+    'k factor winter': 'WinterK',
+    'winterk': 'WinterK',
+    'winter k factor': 'WinterK',
+    'winterkfactor': 'WinterK',
+
+    'k factor  summer': 'SummerK',
+    'k factor summer': 'SummerK',
+    'summerk': 'SummerK',
+    'summer k factor': 'SummerK',
+    'summerkfactor': 'SummerK',
+
+    'k factor  fall': 'FallK',
+    'k factor fall': 'FallK',
+    'fallk': 'FallK',
+    'fall k factor': 'FallK',
+    'fallkfactor': 'FallK',
+
+    'k factor  spring': 'SpringK',
+    'k factor spring': 'SpringK',
+    'springk': 'SpringK',
+    'spring k factor': 'SpringK',
+    'springkfactor': 'SpringK',
+
+    # Tank and delivery fields
+    'usable size': 'UsableSize',
+    'usablesize': 'UsableSize',
+    'tanksize': 'UsableSize',
+    'tank size': 'UsableSize',
+
+    'optimum delivery  fuel': 'OptimumDelivery',
+    'optimum delivery fuel': 'OptimumDelivery',
+    'optimumdelivery': 'OptimumDelivery',
+    'optimum delivery': 'OptimumDelivery',
+    'optdelivery': 'OptimumDelivery',
+
+    'currently in tank': 'CurrentlyInTank',
+    'currentlyintank': 'CurrentlyInTank',
+
+    ' full': 'PercentFull',
+    'full': 'PercentFull',
+    'percentfull': 'PercentFull',
+    'percent full': 'PercentFull',
+    'pctfull': 'PercentFull',
+
+    # Delivery mode
+    'automatic delivery': 'AutoDelivery',
+    'autodelivery': 'AutoDelivery',
+    'auto delivery': 'AutoDelivery',
+    'automatic': 'AutoDelivery',
+    'isauto': 'AutoDelivery',
+
+    # SmartK fields
+    'allow smart k': 'SmartKActive',
+    'allowsmartk': 'SmartKActive',
+    'smartkactive': 'SmartKActive',
+    'smart k active': 'SmartKActive',
+    'smartk': 'SmartKActive',
+    'smartkallowed': 'SmartKActive',
+
+    'smart k predictability': 'SmartKPredictability',
+    'smartkpredictability': 'SmartKPredictability',
+
+    'smart k previous predictability': 'SmartKPrevPredictability',
+    'smartkprevpredictability': 'SmartKPrevPredictability',
+
+    'recalc k factor': 'RecalcK',
+    'recalck': 'RecalcK',
+    'recalckfactor': 'RecalcK',
+
+    # Date fields
+    'last dday': 'LastDDay',
+    'lastdday': 'LastDDay',
+
+    'next dday': 'NextDDay',
+    'nextdday': 'NextDDay',
+    'nextdeliveryday': 'NextDDay',
+    'next delivery day': 'NextDDay',
+
+    'run out dday': 'RunOutDDay',
+    'runoutdday': 'RunOutDDay',
+    'runout dday': 'RunOutDDay',
+    'runoutday': 'RunOutDDay',
+
+    # Additional context fields
+    'customer type': 'CustomerType',
+    'customertype': 'CustomerType',
+
+    'zone  fuel': 'FuelZone',
+    'zone fuel': 'FuelZone',
+    'zonefuel': 'FuelZone',
+    'fuel zone': 'FuelZone',
+    'fuelzone': 'FuelZone',
+
+    'baseload': 'BaseLoad',
+    'base load': 'BaseLoad',
+
+    'estimated delivery  fuel': 'EstimatedDelivery',
+    'estimated delivery fuel': 'EstimatedDelivery',
+    'estimateddelivery': 'EstimatedDelivery',
+    'estimated delivery': 'EstimatedDelivery',
+
+    'salesperson  fuel acct': 'Salesperson',
+    'salesperson fuel acct': 'Salesperson',
+    'salesperson': 'Salesperson',
+
+    'customer segment': 'CustomerSegment',
+    'customersegment': 'CustomerSegment',
+}
+
 DELIVERY_TICKET_MAPPINGS = {
     'TicketID': ['TicketID', 'ticket_id', 'DeliveryID', 'ID'],
     'CustomerFuelID': ['CustomerFuelID', 'customer_fuel_id', 'FuelID'],
@@ -52,31 +239,69 @@ DEGREE_DAY_MAPPINGS = {
 }
 
 
-def normalize_column_names(df: pd.DataFrame, mappings: Dict[str, List[str]]) -> pd.DataFrame:
+def normalize_column_names(df: pd.DataFrame,
+                          mappings: Dict[str, List[str]],
+                          synonyms: Dict[str, str] = None) -> pd.DataFrame:
     """
     Normalize DataFrame column names to canonical form.
 
+    Uses a two-pass approach:
+    1. Exact match against variations list
+    2. Fuzzy match via normalized synonym map
+
     Args:
         df: Input DataFrame
-        mappings: Dict mapping canonical names to possible variations
+        mappings: Dict mapping canonical names to possible variations (exact match)
+        synonyms: Optional dict mapping normalized strings to canonical names (fuzzy match)
 
     Returns:
         DataFrame with normalized column names
     """
     rename_map = {}
+    recognized_columns: Set[str] = set()
 
+    # Pass 1: Exact match using original mappings (backwards compatible)
     for canonical, variations in mappings.items():
         for col in df.columns:
             if col in variations:
                 rename_map[col] = canonical
+                recognized_columns.add(col)
                 break
 
+    # Pass 2: Fuzzy match using synonym map (if provided)
+    if synonyms:
+        for col in df.columns:
+            if col in recognized_columns:
+                continue  # Already matched in pass 1
+
+            # Normalize the column name
+            normalized = _normalize_header(col)
+
+            # Check if normalized form exists in synonym map
+            if normalized in synonyms:
+                canonical = synonyms[normalized]
+                rename_map[col] = canonical
+                recognized_columns.add(col)
+
+    # Apply renaming
     normalized = df.rename(columns=rename_map)
 
-    # Log any missing canonical columns
-    missing = set(mappings.keys()) - set(normalized.columns)
+    # Log unrecognized input columns (excluding empty/unnamed columns)
+    unrecognized = []
+    for col in df.columns:
+        # Skip empty or unnamed columns (common in exports)
+        if col and not col.startswith('Unnamed:') and col.strip():
+            if col not in recognized_columns:
+                unrecognized.append(col)
+
+    if unrecognized:
+        logger.warning(f"Unrecognized input columns (not mapped): {unrecognized}")
+
+    # Log any expected canonical columns still missing after normalization
+    expected_fields = set(mappings.keys())
+    missing = expected_fields - set(normalized.columns)
     if missing:
-        logger.warning(f"Missing expected columns after normalization: {missing}")
+        logger.warning(f"Expected fields not found in input: {missing}")
 
     return normalized
 
@@ -96,8 +321,8 @@ def load_customer_fuel(path: str) -> pd.DataFrame:
     df = pd.read_csv(path)
     logger.info(f"Loaded {len(df)} customer fuel records")
 
-    # Normalize column names
-    df = normalize_column_names(df, CUSTOMER_FUEL_MAPPINGS)
+    # Normalize column names using both exact and fuzzy matching
+    df = normalize_column_names(df, CUSTOMER_FUEL_MAPPINGS, CUSTOMER_FUEL_SYNONYMS)
 
     # Required columns
     required = ['CustomerFuelID', 'CustomerID', 'FuelType']
@@ -106,8 +331,10 @@ def load_customer_fuel(path: str) -> pd.DataFrame:
         raise ValueError(f"Missing required columns in CustomerFuel: {missing}")
 
     # Convert numeric columns
-    numeric_cols = ['CurrentK', 'PreviousK', 'WinterK', 'SpringK', 'SummerK', 'FallK',
-                    'UsableSize', 'PercentFull', 'OptimumDelivery']
+    numeric_cols = ['CurrentK', 'PreviousK', 'PreviousK2', 'WinterK', 'SpringK', 'SummerK', 'FallK',
+                    'UsableSize', 'PercentFull', 'OptimumDelivery', 'CurrentlyInTank',
+                    'SmartKPredictability', 'SmartKPrevPredictability', 'BaseLoad',
+                    'EstimatedDelivery', 'RecalcK']
     for col in numeric_cols:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
@@ -119,7 +346,7 @@ def load_customer_fuel(path: str) -> pd.DataFrame:
             df[col] = df[col].fillna(False).astype(bool)
 
     # Date columns
-    date_cols = ['NextDDay', 'RunOutDDay']
+    date_cols = ['LastDDay', 'NextDDay', 'RunOutDDay']
     for col in date_cols:
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], errors='coerce')
